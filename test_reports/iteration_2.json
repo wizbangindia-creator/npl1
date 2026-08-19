@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 2 full-stack test of Shivshaktiloto. Backend: 26 pytest cases across health, public board (63 slots, IST reveal logic, latest_slot_index, schedule cadence 15min/10min), board by date (today/past/future/invalid), dates list, JWT auth (login success/case-insensitive/wrong password/unknown user/422/me/no-token/bad-token/protected 401), slot override validation + persistence, regenerate. All 26 pass AFTER fixing a critical MongoDB positional-update bug found during testing. Frontend: Home board (white theme, A/B/C = red/green/blue verified via computed styles, 32 revealed + 31 dashes matching IST time, Latest Draw banner matched last revealed row), history date picker + 'Live today', 404 error state, admin login (wrong creds toast 'Invalid credentials' + stays on page; correct creds -> /admin), admin panel 63 editable colored rows, per-row Save persisting to public board, input sanitization, Regenerate, Sign out, protected-route redirect. All frontend flows pass except the admin future-slot editing defect below.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/board/slot", "issue": "FIXED BY TESTER: query used {'slots.hour': h, 'slots.minute': m} with the positional '$' operator, so MongoDB matched the first element satisfying ANY condition and wrote to the WRONG slot (e.g. updating 10:00 PM overwrote 9:00 AM). Replaced with $elemMatch. Regression test added: /app/backend/tests/test_slot_positional_bug.py", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/board/today|/date/{d}", "issue": "No admin-visible variant: unrevealed slot values are masked (a/b/c null) for everyone, so the admin panel cannot load/see future slot numbers (see frontend bug). Recommend an authenticated endpoint (or ?full=1 for admins) returning unmasked slots."},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout / rate limiting (playbook expects lockout after 5 failed attempts). 8 consecutive wrong-password attempts all returned 401 with no throttling, and a valid login immediately after returned 200 (no lockout)."},
+      {"endpoint": "CORS middleware", "issue": "allow_origins comes from CORS_ORIGINS='*' while allow_credentials=True. Wildcard + credentials is invalid for cookie-based auth and overly permissive; set explicit origins."},
+      {"endpoint": "Auth design", "issue": "Playbook expects httpOnly cookie session; implementation returns a JWT stored in localStorage (XSS-exposed, no server-side revocation). Acceptable if intentional, but deviates from the auth playbook."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminPanel", "issue": "Future (unrevealed) slots render EMPTY inputs because the API masks their values. Clicking Save on such a row silently writes 00/00/00 (String('').padStart(2,'0') === '00') and shows a success toast — destroying that slot's generated numbers. Reproduced: saved 10:00 PM row untouched -> toast 'Saved 10:00 PM' and 00/00/00 written. Fix: load unmasked data for admin and/or block save when any input is empty.", "selector": "[data-testid='admin-row-62-a'], [data-testid='admin-row-62-save']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home (mobile 390px)", "issues": ["Page overflows horizontally (scrollWidth 403 > clientWidth 390): the letter-spaced SHIVSHAKTILOTO h1 is wider than the viewport and is clipped on the right"]},
+      {"screen": "Home / Admin date pickers", "issues": ["Uses native browser <input type='date'> picker instead of the shadcn Calendar/Popover component available in the project"]},
+      {"screen": "AdminPanel", "issues": ["No indication of which rows are already revealed vs upcoming, making accidental overwrites of live results easy"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_slot_positional_bug.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix AdminPanel future-slot editing: fetch unmasked values for admin (new/authenticated endpoint) and disable Save when any of a/b/c is empty instead of padding to '00'",
+    "Add brute-force lockout / rate limiting on POST /api/auth/login (playbook requirement)",
+    "Set explicit CORS_ORIGINS instead of '*' while allow_credentials=True",
+    "Fix mobile horizontal overflow of the SHIVSHAKTILOTO headline (<=390px)",
+    "Optional: replace native date inputs with shadcn Calendar; mark revealed vs upcoming rows in admin table",
+    "Review tester's backend fix in PUT /api/board/slot ($elemMatch) and keep the regression test"
+  ],
+  "critical_code_review_comments": [
+    "Never combine dotted multi-field array filters with the positional '$' operator — always use $elemMatch (this caused wrong-slot writes).",
+    "AdminPanel.saveRow pads empty strings to '00' silently; validate emptiness before padStart.",
+    "bcrypt hash verified in DB as $2b$12$ (60 chars) and seed_admin correctly re-hashes when ADMIN_PASSWORD changes — both good.",
+    "Board reveal logic is computed server-side per request (good), but consider a compound unique index on boards.date to make ensure_board race-safe (currently relies on exception handling with no unique index)."
+  ],
+  "updated_files": [
+    "/app/backend/server.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_slot_positional_bug.py"
+  ],
+  "success_rate": {"backend": "100% (26/26 after tester fix; 1 critical defect found)", "frontend": "92% (11/12 flows; admin future-slot edit broken)"},
+  "seed_data_creation": "Inserted a past-date board for 2026-08-04 into MongoDB 'boards' to exercise the history date picker (all slots revealed). Today's board (2026-08-05) was regenerated during tests.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@shivshakti.local / shivshakti2026 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Backend suite lives in /app/backend/tests/ (backend_test.py + test_slot_positional_bug.py); run: cd /app/backend && python -m pytest tests/ -v -p no:randomly. Tester already fixed the $elemMatch bug in PUT /api/board/slot. Remaining known open defect: AdminPanel saving an unedited future slot writes 00/00/00 — re-verify by logging in at /admin, checking admin-row-62-a is populated, and that Save is blocked when inputs are empty. Past-date board 2026-08-04 is seeded for history testing.",
+  "rca_of_the_issue": "MongoDB's positional '$' operator resolves to the first array element matching the query; with {'slots.hour': h, 'slots.minute': m} the two conditions can be satisfied by different elements, so '$' pointed at the first element matching either condition (e.g. index 0 with minute=0) instead of the intended (hour, minute) pair. Any admin override of a slot other than 9:00 AM corrupted the wrong row. Fixed with {'slots': {'$elemMatch': {...}}}; verified with a regression test asserting 12:00 PM updates while 9:00 AM stays unchanged."
+}

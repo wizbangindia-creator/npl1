@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 3 regression testing of the two HIGH issues from iteration 2. Backend: 39 pytest cases pass (100%) — existing suite (26) + new /app/backend/tests/test_admin_board_endpoints.py (12) + positional-bug regression (1). Verified GET /api/admin/board/today returns all 63 slots unmasked (every a/b/c a 2-digit string, revealed=true), values match public board for revealed slots, latest_slot_index identical to public; GET /api/admin/board/date/{d} works for today, 400 on future/invalid format, 404 on unknown past date; both admin endpoints return 401 without/with bad Bearer token; public GET /api/board/today still masks all future slots (a/b/c null, revealed=false); PUT /api/board/slot with $elemMatch updated 5:10 PM to 77/88/99 while 9:00 AM stayed unchanged; empty values rejected with 400. Frontend: admin login -> /admin, all 63 rows populated with 2-digit values (no blanks, previously the HIGH bug), edited 5:10 PM to 77/88/99 -> success toast 'Saved 5:10 PM' -> single PUT observed -> persisted after reload; clearing column B and clicking Save shows validation toast 'Each column needs a full 2-digit number (00-99)', issues NO PUT request, and values remain 77/88/99 after reload. Public board shows 33/63 revealed with 30 masked rows and correct Latest Draw banner (5:00 PM 20/99/74); no leaked future values.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "STILL OPEN from iteration 2: no brute-force lockout / rate limiting (playbook expects lockout after 5 failed attempts)."},
+      {"endpoint": "CORS middleware", "issue": "STILL OPEN: backend/.env has CORS_ORIGINS=\"*\" while allow_credentials=True — invalid combination for credentialed requests and overly permissive. Also the quoted value means the origin literal is '\"*\"'."},
+      {"endpoint": "GET /api/admin/board/*", "issue": "build_admin_board_response sets revealed=true for every slot, so the admin UI cannot distinguish already-published rows from upcoming ones (accidental overwrite risk of live results). Consider a separate 'published' flag."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home (mobile 390px)", "issues": ["STILL OPEN from iteration 2 (not retested this round): letter-spaced SHIVSHAKTILOTO h1 caused horizontal overflow"]},
+      {"screen": "Home / Admin date pickers", "issues": ["Native browser <input type='date'> still used instead of shadcn Calendar/Popover"]},
+      {"screen": "AdminPanel", "issues": ["No visual distinction between revealed (already public) rows and future rows"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_board_endpoints.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_slot_positional_bug.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Both HIGH regressions from iteration 2 are CONFIRMED FIXED — no action needed there",
+    "Optional/remaining: add login rate limiting, set explicit CORS_ORIGINS (unquoted) instead of \"*\", fix mobile headline overflow, mark revealed vs upcoming rows in admin table"
+  ],
+  "critical_code_review_comments": [
+    "Admin endpoints correctly guarded via dependencies=[Depends(require_admin)] and exclude _id; PUT uses $elemMatch (correct).",
+    "CORS_ORIGINS in .env is quoted (\"*\") — os.environ value includes the quotes, so any future explicit-origin config must be unquoted or CORS will silently fail.",
+    "AdminPanel.saveRow now validates /^\\d{2}$/ on all three columns before the PUT — verified no request is issued on invalid input."
+  ],
+  "updated_files": ["/app/backend/tests/test_admin_board_endpoints.py"],
+  "success_rate": {"backend": "100% (39/39)", "frontend": "100% (all regression flows passed)"},
+  "seed_data_creation": "No new seed data. Today's board (2026-08-05) 5:10 PM slot left at 77/88/99 by the frontend regression test; all other backend edits were restored.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@shivshakti.local / shivshakti2026 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/ -v -p no:randomly. Iteration-2 HIGH bugs (admin masked future slots, empty-save writing 00) are fixed and covered by tests/test_admin_board_endpoints.py + AdminPanel Playwright flow. Only cosmetic/hardening items remain: login rate limiting, CORS wildcard with credentials, mobile headline overflow at 390px, native date picker, and no revealed/upcoming distinction in the admin table.",
+  "rca_of_the_issue": "Previous HIGH bug root cause: the admin panel consumed the public masked board endpoint and padStart('0') turned empty inputs into '00'. Fix verified: protected /api/admin/board/* returns unmasked values and AdminPanel requires a strict 2-digit value per column before issuing PUT."
+}

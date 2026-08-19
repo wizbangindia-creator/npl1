@@ -1,0 +1,192 @@
+<?php
+// =============================================================
+//  NPL1 — Shivshaktiloto  |  Shared config for all PHP files
+// =============================================================
+//  1. Edit the four DB constants below to match your Hostinger DB.
+//  2. Change ADMIN_PASSWORD before going live.
+//  3. Upload every file to your public_html folder.
+// =============================================================
+
+// ---------- Database credentials (from Hostinger hPanel) ----------
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'YOUR_DB_NAME');       // e.g. u123456789_npl1
+define('DB_USER', 'YOUR_DB_USER');       // e.g. u123456789_admin
+define('DB_PASS', 'YOUR_DB_PASSWORD');
+
+// ---------- Admin login (single admin) ----------
+define('ADMIN_EMAIL',    'admin@shivshakti.local');
+define('ADMIN_PASSWORD', 'shivshakti2026');   // change me before deploying
+
+// ---------- Super-draw reveal time (IST) ----------
+define('SUPER_DRAW_HOUR',   11);
+define('SUPER_DRAW_MINUTE', 30);
+
+date_default_timezone_set('Asia/Kolkata');
+if (session_status() === PHP_SESSION_NONE) session_start();
+
+// -------------------- DB connection --------------------
+function db() {
+    static $pdo = null;
+    if ($pdo === null) {
+        $pdo = new PDO(
+            'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4',
+            DB_USER, DB_PASS,
+            [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES   => false,
+            ]
+        );
+    }
+    return $pdo;
+}
+
+// -------------------- Helpers --------------------
+function today_ist() {
+    return (new DateTime('now', new DateTimeZone('Asia/Kolkata')))->format('Y-m-d');
+}
+function two_digit_random() {
+    return str_pad((string) mt_rand(0, 99), 2, '0', STR_PAD_LEFT);
+}
+function format_time_12h($h, $m) {
+    $period = $h < 12 ? 'AM' : 'PM';
+    $dh = $h % 12; if ($dh === 0) $dh = 12;
+    return sprintf('%d:%02d %s', $dh, $m, $period);
+}
+function generate_slot_times() {
+    $slots = [];
+    for ($m = 9 * 60;      $m <= 17 * 60; $m += 15) $slots[] = [intdiv($m,60), $m%60];
+    for ($m = 17 * 60 + 10; $m <= 22 * 60; $m += 10) $slots[] = [intdiv($m,60), $m%60];
+    return $slots;
+}
+function json_input() {
+    return json_decode(file_get_contents('php://input'), true) ?: [];
+}
+function json_response($data, $status = 200) {
+    http_response_code($status);
+    header('Content-Type: application/json');
+    echo json_encode($data);
+    exit;
+}
+
+// -------------------- Board persistence --------------------
+function ensure_board($date) {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM slots WHERE date = ?');
+    $stmt->execute([$date]);
+    if ((int)$stmt->fetchColumn() > 0) return;
+
+    $ins = $pdo->prepare('INSERT IGNORE INTO slots (date, hour, minute, a, b, c) VALUES (?, ?, ?, ?, ?, ?)');
+    foreach (generate_slot_times() as [$h, $m]) {
+        $ins->execute([$date, $h, $m, two_digit_random(), two_digit_random(), two_digit_random()]);
+    }
+}
+
+function build_board_response($date, $admin_view = false) {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT hour, minute, a, b, c FROM slots WHERE date = ? ORDER BY hour, minute');
+    $stmt->execute([$date]);
+    $rows = $stmt->fetchAll();
+
+    $today   = today_ist();
+    $is_today = ($date === $today);
+    $is_past  = ($date < $today);
+    $now = new DateTime('now', new DateTimeZone('Asia/Kolkata'));
+    $cur_min = (int)$now->format('H') * 60 + (int)$now->format('i');
+
+    $slots = []; $latest = -1;
+    foreach ($rows as $i => $r) {
+        $h = (int)$r['hour']; $m = (int)$r['minute'];
+        $slot_min = $h * 60 + $m;
+        if ($admin_view || $is_past)   $revealed = true;
+        elseif ($is_today)             $revealed = $slot_min <= $cur_min;
+        else                           $revealed = false;
+        if ($revealed) $latest = $i;
+        $slots[] = [
+            'time'     => format_time_12h($h, $m),
+            'hour'     => $h,
+            'minute'   => $m,
+            'a'        => $revealed ? $r['a'] : null,
+            'b'        => $revealed ? $r['b'] : null,
+            'c'        => $revealed ? $r['c'] : null,
+            'revealed' => $revealed,
+        ];
+    }
+    return [
+        'date'               => $date,
+        'current_time_ist'   => $now->format('h:i:s A'),
+        'current_hour'       => (int)$now->format('H'),
+        'current_minute'     => (int)$now->format('i'),
+        'slots'              => $slots,
+        'is_today'           => $is_today,
+        'latest_slot_index'  => $admin_view && !$is_today ? -1 : $latest,
+    ];
+}
+
+// -------------------- Super Draw --------------------
+function ensure_super_draw($date) {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT 1 FROM super_draws WHERE date = ?');
+    $stmt->execute([$date]);
+    if ($stmt->fetch()) return;
+    $ins = $pdo->prepare('INSERT IGNORE INTO super_draws (date, number) VALUES (?, ?)');
+    $ins->execute([$date, two_digit_random()]);
+}
+
+function build_super_response($date, $admin_view = false) {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT number FROM super_draws WHERE date = ?');
+    $stmt->execute([$date]);
+    $row = $stmt->fetch();
+    if (!$row) return null;
+
+    $today = today_ist();
+    $is_today = ($date === $today);
+    $is_past  = ($date < $today);
+    $now = new DateTime('now', new DateTimeZone('Asia/Kolkata'));
+    $cur_min = (int)$now->format('H') * 60 + (int)$now->format('i');
+    $reveal_min = SUPER_DRAW_HOUR * 60 + SUPER_DRAW_MINUTE;
+
+    if ($admin_view || $is_past)   $revealed = true;
+    elseif ($is_today)             $revealed = $cur_min >= $reveal_min;
+    else                           $revealed = false;
+
+    return [
+        'date'             => $date,
+        'number'           => $revealed ? $row['number'] : null,
+        'reveal_time'      => format_time_12h(SUPER_DRAW_HOUR, SUPER_DRAW_MINUTE),
+        'current_time_ist' => $now->format('h:i:s A'),
+        'revealed'         => $revealed,
+        'is_today'         => $is_today,
+    ];
+}
+
+// -------------------- Auth --------------------
+function is_admin() { return !empty($_SESSION['admin_email']); }
+
+function require_admin_or_json() {
+    if (!is_admin()) json_response(['error' => 'Not authenticated'], 401);
+}
+function require_admin_or_redirect($url = 'admin_login.php') {
+    if (!is_admin()) { header('Location: ' . $url); exit; }
+}
+
+// Seed admin row on first use (uses password_hash bcrypt)
+function seed_admin() {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT password_hash FROM admins WHERE email = ?');
+    $stmt->execute([ADMIN_EMAIL]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        $hash = password_hash(ADMIN_PASSWORD, PASSWORD_BCRYPT);
+        $ins = $pdo->prepare('INSERT INTO admins (email, password_hash) VALUES (?, ?)');
+        $ins->execute([ADMIN_EMAIL, $hash]);
+    } elseif (!password_verify(ADMIN_PASSWORD, $row['password_hash'])) {
+        // Keep DB password in sync with config.php value on password rotation
+        $hash = password_hash(ADMIN_PASSWORD, PASSWORD_BCRYPT);
+        $upd = $pdo->prepare('UPDATE admins SET password_hash = ? WHERE email = ?');
+        $upd->execute([$hash, ADMIN_EMAIL]);
+    }
+}
+
+function bootstrap() { seed_admin(); }

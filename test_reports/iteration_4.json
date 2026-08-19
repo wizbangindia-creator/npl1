@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 4 testing of the new Super Draw feature, NPL1 rename and amber Time column, plus regression of main-board admin editing. Backend: 68 pytest tests executed (new test_superdraw.py 20/20, test_superdraw_db.py 2/3, test_superdraw_reveal_unit.py 6/6, plus pre-existing suites) -> 67 passed / 1 failed (missing unique index, hardening only). Frontend: verified '/' shows NPL1 headline, Time header+cells amber rgb(217,119,6), 'Super Draw' nav works; '/super-draw' loads without auth, shows number 58/77 with 11:30 AM reveal text, past-date picker + Main Board link work; admin Super Draw editor validates and saves with toast, public page reflects the new number; per-slot Save regression still persists to the correct slot only.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "db.super_draws", "issue": "No unique index on 'date' (boards.date likewise). ensure_super_draw relies on find-then-insert, so concurrent first-hits of the day can create two documents for the same date (the insert-race except branch can never trigger without the unique index). Add await db.super_draws.create_index('date', unique=True) in startup."},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout/rate limiting: 7 consecutive wrong passwords all return 401 and a valid login immediately succeeds (playbook expects lockout after 5 fails)."},
+      {"endpoint": "CORS / auth transport", "issue": "CORS_ORIGINS='*' combined with allow_credentials=True is an invalid combination per the CORS spec; auth is Bearer-token in localStorage rather than httpOnly cookies (deviation from auth playbook, though functionally working). bcrypt hash format verified OK ($2b$12$, 60 chars); seed_admin correctly re-hashes when the env password changes."},
+      {"endpoint": "PUT /api/superdraw", "issue": "Accepts an arbitrary past 'date' and silently updates historical results (404 only when the date has no doc). Consider restricting edits to today or logging an audit trail."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home board Time column", "issues": ["Latest-draw row overrides the new amber with dark navy (.row-latest .ss-col-time { color:#0f172a }) so 1 of 63 Time cells is not amber - confirm this is intentional.", "Pending rows use pale amber #e5b881 on white (rgb(229,184,129)), contrast ratio ~1.9:1 - fails WCAG AA; darken (e.g. #b45309 at reduced opacity) for readability."]},
+      {"screen": "Home / Super Draw / Admin date pickers", "issues": ["All date inputs use the browser-native <input type=date> (mm/dd/yyyy widget) instead of the shadcn Calendar/Popover component, which looks inconsistent with the rest of the styled UI."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_superdraw.py",
+    "/app/backend/tests/test_superdraw_db.py",
+    "/app/backend/tests/test_superdraw_reveal_unit.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add unique index on super_draws.date (and boards.date) at startup to guarantee one document per day under concurrency.",
+    "Decide/fix Time-column color exceptions: latest row dark navy override and low-contrast pale amber for pending rows.",
+    "Optional hardening: login rate-limit/lockout, explicit CORS origins instead of '*' with allow_credentials, restrict PUT /api/superdraw to today's date."
+  ],
+  "critical_code_review_comments": [
+    "ensure_super_draw / ensure_board use a find-then-insert pattern whose race-handling except branch is dead code without a unique index on 'date'.",
+    "build_super_response reveal gate verified by unit test with an injected clock: masked (number=null, revealed=false) before 11:30 AM IST, unmasked at/after 11:30; admin_view and past dates always revealed - logic is correct.",
+    "server.py is ~486 lines and already mixes auth, board and super-draw concerns; consider splitting into routers before it grows past 700 lines."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_superdraw.py",
+    "/app/backend/tests/test_superdraw_db.py",
+    "/app/backend/tests/test_superdraw_reveal_unit.py"
+  ],
+  "success_rate": {"backend": "98% (67/68)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Temporary super_draws doc for 2026-01-05 (inserted and deleted by test teardown). Today's super draw number was left at 58 via the admin UI save test; the 9:30 AM board slot was edited to 13/24/35 then restored to its original 69/49/06.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@shivshakti.local / shivshakti2026 (verified working; note /app/memory/test_credentials.md is not yet updated with the new Super Draw endpoints or /super-draw route)",
+  "context_for_next_testing_agent": "Super Draw backend+frontend fully covered by /app/backend/tests/test_superdraw*.py. Reveal-gate behaviour before 11:30 AM IST cannot be tested over HTTP during afternoon runs - use test_superdraw_reveal_unit.py (monkeypatches server.datetime) for that. Only open backend failure is the missing unique index on super_draws.date. Frontend flows (NPL1 title, amber time column, /super-draw, admin super editor, per-slot save) all pass as of 2026-08-05 IST evening.",
+  "rca_of_the_issue": "N/A - no functional defects found. The single failing test is an intentional hardening assertion: super_draws has no unique index on 'date', so the documented 'exactly one document per date' guarantee depends on request timing rather than a DB constraint."
+}
