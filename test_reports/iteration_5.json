@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 5: end-to-end verification of the new admin flow (single upcoming slot only, A/B/C save, Hold/Release with 60s auto-reveal window, change password). Backend: 11/11 pytest cases pass in /app/backend/tests/test_admin_upcoming_hold_password.py, covering auth, upcoming payload shape, save persistence + validation, hold->release semantics (including masking on GET /api/board/today when a past-time slot is held within the 60s window and auto-reveal after), change-password happy path + wrong-current + full login cycle with revert. Frontend (Playwright, /admin): login works, admin panel shows exactly one admin-upcoming-card with one admin-upcoming-time (8:30 PM shown), NO table of past slots (0 tables on page); A/B/C edit + Save persists (77/88/99); Hold toggles to Release and Release toggles back; change-password form works end-to-end (changed to NewTemp_1234, logged in successfully, reverted to shivshakti2026 and verified login). Public root '/' still loads NPL1 board. Password reset back to shivshakti2026 at end as required.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/change-password", "issue": "No minimum-strength validation beyond length>=6; also does not invalidate other outstanding JWTs (they remain valid for 12h). Consider bumping a per-user password_version claim."},
+      {"endpoint": "POST /api/board/slot/hold", "issue": "Hold can be applied to any slot on any date (including already-past days) with no time guard; UI only exposes it for the upcoming slot but the endpoint itself has no server-side restriction."},
+      {"endpoint": "GET /api/admin/board/upcoming", "issue": "Definition of 'upcoming' is 'first slot not yet publicly revealed'. If admin holds a slot AFTER its reveal time, this endpoint keeps returning that held slot as 'upcoming' (correct per spec), but if network fails during release the slot silently auto-releases at slot+60s - no audit log of hold/release events."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin panel", "issues": ["Change-password form has no client-side strength meter or 'show password' toggle - minor UX polish."]},
+      {"screen": "Home board", "issues": ["Date picker still uses browser-native <input type=date> instead of shadcn Calendar (pre-existing carry-over from iteration 4)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_upcoming_hold_password.py",
+    "/app/test_reports/pytest/iteration5.xml"
+  ],
+  "action_items": [
+    "Optional: add server-side restriction so hold/release only target today's upcoming slot.",
+    "Optional: invalidate existing JWTs after password change (rotate a version claim or store token id).",
+    "Carry-over from iter 4: unique index on boards.date / super_draws.date, and swap native date input for shadcn Calendar."
+  ],
+  "critical_code_review_comments": [
+    "server.py now ~590 lines mixing auth/board/hold/super concerns; nearing the 700-line refactor threshold - split into routers/services soon.",
+    "seed_admin correctly honours password_changed flag so admin-changed passwords survive restart; verified functionally by the full-cycle test.",
+    "slot_reveal_state auto-releases after HOLD_MAX_SECONDS=60 without touching the DB - clean and race-free for reads, but the slot's held/released flags stay set forever in Mongo; consider clearing them on next-day rollover."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_admin_upcoming_hold_password.py",
+    "/app/test_reports/iteration_5.json"
+  ],
+  "success_rate": {"backend": "100% (11/11 new tests)", "frontend": "100% of tested flows"},
+  "test_credentials": "admin@shivshakti.local / shivshakti2026 (verified working; password was changed to NewTemp_1234 mid-test and reverted before finish)",
+  "seed_data_creation": "Today's upcoming slot (8:30 PM IST) A/B/C left at 77/88/99 after the save test; hold/released flags were toggled and left in 'released' state on that slot.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New feature suite fully covered by /app/backend/tests/test_admin_upcoming_hold_password.py. Reveal-mask window (60s) is time-sensitive; if you re-run in the morning and no past slot exists yet, test_hold_masks_on_public_board_when_time_reached will pytest.skip. Admin panel deliberately shows only the next unrevealed slot - do not add a historical table.",
+  "rca_of_the_issue": "N/A - all requested behaviours verified working."
+}

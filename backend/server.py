@@ -147,6 +147,17 @@ class SlotUpdate(BaseModel):
     c: str
 
 
+class SlotHold(BaseModel):
+    date: str
+    hour: int
+    minute: int
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 # ---------- Board persistence ----------
 async def ensure_board(date_str: str) -> dict:
     existing = await db.boards.find_one({'date': date_str}, {'_id': 0})
@@ -169,24 +180,41 @@ async def ensure_board(date_str: str) -> dict:
     return doc
 
 
+HOLD_MAX_SECONDS = 60
+
+
+def slot_reveal_state(s: dict, date_str: str, now_ist: datetime):
+    """Public reveal state for a slot: (revealed, hold_remaining_seconds)."""
+    today_str = now_ist.strftime('%Y-%m-%d')
+    if date_str < today_str:
+        return True, None
+    if date_str != today_str:
+        return False, None
+    h, m = int(s['hour']), int(s['minute'])
+    slot_min = h * 60 + m
+    cur_min = now_ist.hour * 60 + now_ist.minute
+    if slot_min > cur_min:
+        return False, None  # reveal time not reached yet
+    if not s.get('held') or s.get('released'):
+        return True, None
+    slot_dt = now_ist.replace(hour=h, minute=m, second=0, microsecond=0)
+    hold_end = slot_dt + timedelta(seconds=HOLD_MAX_SECONDS)
+    if now_ist >= hold_end:
+        return True, None  # 60s window elapsed -> auto released
+    remaining = int((hold_end - now_ist).total_seconds()) + 1
+    return False, remaining
+
+
 def build_board_response(doc: dict) -> BoardResponse:
     now_ist = datetime.now(IST)
     today_str = now_ist.strftime('%Y-%m-%d')
     is_today = doc['date'] == today_str
-    is_past = doc['date'] < today_str
-    current_minutes = now_ist.hour * 60 + now_ist.minute
 
     result: List[Slot] = []
     latest_idx = -1
     for i, s in enumerate(doc['slots']):
         h, m = int(s['hour']), int(s['minute'])
-        slot_min = h * 60 + m
-        if is_past:
-            revealed = True
-        elif is_today:
-            revealed = slot_min <= current_minutes
-        else:
-            revealed = False
+        revealed, _ = slot_reveal_state(s, doc['date'], now_ist)
         if revealed:
             latest_idx = i
         result.append(Slot(
@@ -337,6 +365,83 @@ async def regenerate_today():
     return {'date': doc['date'], 'slot_count': len(doc['slots'])}
 
 
+@api_router.get('/admin/board/upcoming', dependencies=[Depends(require_admin)])
+async def admin_get_upcoming():
+    date_str = today_str_ist()
+    doc = await ensure_board(date_str)
+    now_ist = datetime.now(IST)
+    cur_min = now_ist.hour * 60 + now_ist.minute
+    for i, s in enumerate(doc['slots']):
+        revealed, remaining = slot_reveal_state(s, date_str, now_ist)
+        if not revealed:
+            h, m = int(s['hour']), int(s['minute'])
+            return {
+                'date': date_str,
+                'current_time_ist': now_ist.strftime('%I:%M:%S %p'),
+                'index': i,
+                'time_reached': (h * 60 + m) <= cur_min,
+                'hold_remaining_seconds': remaining,
+                'slot': {
+                    'time': format_time_12h(h, m),
+                    'hour': h, 'minute': m,
+                    'a': s['a'], 'b': s['b'], 'c': s['c'],
+                    'held': bool(s.get('held')),
+                    'released': bool(s.get('released')),
+                },
+            }
+    return {
+        'date': date_str,
+        'current_time_ist': now_ist.strftime('%I:%M:%S %p'),
+        'index': -1,
+        'time_reached': False,
+        'hold_remaining_seconds': None,
+        'slot': None,
+    }
+
+
+@api_router.post('/board/slot/hold', dependencies=[Depends(require_admin)])
+async def hold_slot(payload: SlotHold):
+    if payload.date == today_str_ist():
+        await ensure_board(payload.date)
+    result = await db.boards.update_one(
+        {'date': payload.date, 'slots': {'$elemMatch': {'hour': payload.hour, 'minute': payload.minute}}},
+        {'$set': {'slots.$.held': True, 'slots.$.released': False}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail='Slot not found')
+    return {'success': True}
+
+
+@api_router.post('/board/slot/release', dependencies=[Depends(require_admin)])
+async def release_slot(payload: SlotHold):
+    if payload.date == today_str_ist():
+        await ensure_board(payload.date)
+    result = await db.boards.update_one(
+        {'date': payload.date, 'slots': {'$elemMatch': {'hour': payload.hour, 'minute': payload.minute}}},
+        {'$set': {'slots.$.released': True}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail='Slot not found')
+    return {'success': True}
+
+
+@api_router.post('/auth/change-password')
+async def change_password(req: ChangePasswordRequest, payload: dict = Depends(require_admin)):
+    email = payload['sub']
+    user = await db.users.find_one({'email': email})
+    if not user or not verify_password(req.current_password, user.get('password_hash', '')):
+        raise HTTPException(status_code=401, detail='Current password is incorrect')
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail='New password must be at least 6 characters')
+    if req.new_password == req.current_password:
+        raise HTTPException(status_code=400, detail='New password must be different from current password')
+    await db.users.update_one(
+        {'email': email},
+        {'$set': {'password_hash': hash_password(req.new_password), 'password_changed': True}}
+    )
+    return {'success': True}
+
+
 # ---------- Super Draw (one number/day at 11:30 AM IST) ----------
 SUPER_DRAW_HOUR = 11
 SUPER_DRAW_MINUTE = 30
@@ -466,7 +571,7 @@ async def seed_admin():
             'created_at': datetime.now(timezone.utc).isoformat(),
         })
         logger.info(f'Seeded admin: {ADMIN_EMAIL}')
-    elif not verify_password(ADMIN_PASSWORD, existing.get('password_hash', '')):
+    elif not existing.get('password_changed') and not verify_password(ADMIN_PASSWORD, existing.get('password_hash', '')):
         await db.users.update_one(
             {'email': ADMIN_EMAIL},
             {'$set': {'password_hash': hash_password(ADMIN_PASSWORD)}}

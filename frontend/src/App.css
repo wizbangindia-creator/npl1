@@ -555,6 +555,57 @@
   font-size: 0.8rem; letter-spacing: 1px;
 }
 
+/* ---------------- Admin: clock + upcoming changer ---------------- */
+.ss-admin-clock {
+  display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px;
+  font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; letter-spacing: 1.5px;
+  color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0;
+  padding: 6px 14px; border-radius: 999px;
+}
+.ss-upcoming-card { padding: 24px; margin-bottom: 20px; }
+.ss-upcoming-head {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px dashed #e5e7eb;
+}
+.ss-upcoming-label {
+  font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem;
+  letter-spacing: 3px; text-transform: uppercase; color: #d97706;
+}
+.ss-upcoming-time {
+  font-family: 'Cinzel', serif; font-weight: 700; font-size: 1.6rem;
+  letter-spacing: 2px; color: #0f172a;
+}
+.ss-upcoming-status {
+  font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem;
+  letter-spacing: 1px; color: #64748b; margin-bottom: 18px; min-height: 20px;
+}
+.ss-hold-live { color: #dc2626; font-weight: 700; }
+.ss-upcoming-inputs {
+  display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px;
+}
+.ss-upcoming-col { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.ss-upcoming-col-label {
+  font-family: 'IBM Plex Mono', monospace; font-weight: 700; letter-spacing: 3px;
+  font-size: 0.9rem;
+}
+.ss-upcoming-col-label.col-a-h { color: #dc2626; }
+.ss-upcoming-col-label.col-b-h { color: #059669; }
+.ss-upcoming-col-label.col-c-h { color: #2563eb; }
+.ss-upcoming-col .ss-admin-input {
+  width: 88px !important; font-size: 1.6rem !important; padding: 10px !important;
+}
+.ss-upcoming-actions {
+  display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+}
+.ss-password-form {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: end;
+}
+.ss-password-form > button { grid-column: 1 / -1; justify-self: start; }
+@media (max-width: 640px) {
+  .ss-password-form { grid-template-columns: 1fr; }
+}
+
+
 /* ---------------- Responsive ---------------- */
 @media (max-width: 720px) {
   .ss-latest-card { grid-template-columns: 1fr; text-align: center; gap: 16px; }
