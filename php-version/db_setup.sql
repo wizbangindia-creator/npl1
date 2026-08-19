@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS admins (
   id            INT AUTO_INCREMENT PRIMARY KEY,
   email         VARCHAR(191) UNIQUE NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
+  password_changed TINYINT(1) NOT NULL DEFAULT 0,
   created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -17,6 +18,8 @@ CREATE TABLE IF NOT EXISTS slots (
   a       CHAR(2) NOT NULL,
   b       CHAR(2) NOT NULL,
   c       CHAR(2) NOT NULL,
+  held     TINYINT(1) NOT NULL DEFAULT 0,
+  released TINYINT(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (date, hour, minute)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

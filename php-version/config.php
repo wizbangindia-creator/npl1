@@ -21,6 +21,9 @@ define('ADMIN_PASSWORD', 'shivshakti2026');   // change me before deploying
 define('SUPER_DRAW_HOUR',   11);
 define('SUPER_DRAW_MINUTE', 30);
 
+// ---------- Result hold window (seconds) ----------
+define('HOLD_MAX_SECONDS', 60);
+
 date_default_timezone_set('Asia/Kolkata');
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -84,23 +87,22 @@ function ensure_board($date) {
 
 function build_board_response($date, $admin_view = false) {
     $pdo = db();
-    $stmt = $pdo->prepare('SELECT hour, minute, a, b, c FROM slots WHERE date = ? ORDER BY hour, minute');
+    $stmt = $pdo->prepare('SELECT hour, minute, a, b, c, held, released FROM slots WHERE date = ? ORDER BY hour, minute');
     $stmt->execute([$date]);
     $rows = $stmt->fetchAll();
 
     $today   = today_ist();
     $is_today = ($date === $today);
-    $is_past  = ($date < $today);
     $now = new DateTime('now', new DateTimeZone('Asia/Kolkata'));
-    $cur_min = (int)$now->format('H') * 60 + (int)$now->format('i');
 
     $slots = []; $latest = -1;
     foreach ($rows as $i => $r) {
         $h = (int)$r['hour']; $m = (int)$r['minute'];
-        $slot_min = $h * 60 + $m;
-        if ($admin_view || $is_past)   $revealed = true;
-        elseif ($is_today)             $revealed = $slot_min <= $cur_min;
-        else                           $revealed = false;
+        if ($admin_view) {
+            $revealed = true;
+        } else {
+            [$revealed, $rem] = slot_reveal_state($r, $date, $now);
+        }
         if ($revealed) $latest = $i;
         $slots[] = [
             'time'     => format_time_12h($h, $m),
@@ -110,6 +112,8 @@ function build_board_response($date, $admin_view = false) {
             'b'        => $revealed ? $r['b'] : null,
             'c'        => $revealed ? $r['c'] : null,
             'revealed' => $revealed,
+            'held'     => !empty($r['held']),
+            'released' => !empty($r['released']),
         ];
     }
     return [
@@ -121,6 +125,25 @@ function build_board_response($date, $admin_view = false) {
         'is_today'           => $is_today,
         'latest_slot_index'  => $admin_view && !$is_today ? -1 : $latest,
     ];
+}
+
+// Public reveal state for one slot row: returns [revealed(bool), hold_remaining(int|null)]
+function slot_reveal_state($r, $date, $now) {
+    $today = $now->format('Y-m-d');
+    if ($date < $today) return [true, null];
+    if ($date !== $today) return [false, null];
+    $h = (int)$r['hour']; $m = (int)$r['minute'];
+    $slot_min = $h * 60 + $m;
+    $cur_min  = (int)$now->format('H') * 60 + (int)$now->format('i');
+    if ($slot_min > $cur_min) return [false, null];           // reveal time not reached
+    $held     = !empty($r['held']);
+    $released = !empty($r['released']);
+    if (!$held || $released) return [true, null];
+    $slot_dt  = (clone $now)->setTime($h, $m, 0);
+    $hold_end = (clone $slot_dt)->modify('+' . HOLD_MAX_SECONDS . ' seconds');
+    if ($now >= $hold_end) return [true, null];               // 60s window elapsed -> auto reveal
+    $remaining = ($hold_end->getTimestamp() - $now->getTimestamp()) + 1;
+    return [false, (int)$remaining];
 }
 
 // -------------------- Super Draw --------------------
@@ -174,19 +197,68 @@ function require_admin_or_redirect($url = 'admin_login.php') {
 // Seed admin row on first use (uses password_hash bcrypt)
 function seed_admin() {
     $pdo = db();
-    $stmt = $pdo->prepare('SELECT password_hash FROM admins WHERE email = ?');
+    $stmt = $pdo->prepare('SELECT password_hash, password_changed FROM admins WHERE email = ?');
     $stmt->execute([ADMIN_EMAIL]);
     $row = $stmt->fetch();
     if (!$row) {
         $hash = password_hash(ADMIN_PASSWORD, PASSWORD_BCRYPT);
         $ins = $pdo->prepare('INSERT INTO admins (email, password_hash) VALUES (?, ?)');
         $ins->execute([ADMIN_EMAIL, $hash]);
-    } elseif (!password_verify(ADMIN_PASSWORD, $row['password_hash'])) {
-        // Keep DB password in sync with config.php value on password rotation
+    } elseif (empty($row['password_changed']) && !password_verify(ADMIN_PASSWORD, $row['password_hash'])) {
+        // Sync DB password with config.php ONLY while the admin has never changed it in-app.
         $hash = password_hash(ADMIN_PASSWORD, PASSWORD_BCRYPT);
         $upd = $pdo->prepare('UPDATE admins SET password_hash = ? WHERE email = ?');
         $upd->execute([$hash, ADMIN_EMAIL]);
     }
 }
 
-function bootstrap() { seed_admin(); }
+// Change the logged-in admin's password. Returns [ok(bool), error(string|null)].
+function change_admin_password($email, $current, $new) {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT password_hash FROM admins WHERE email = ?');
+    $stmt->execute([$email]);
+    $row = $stmt->fetch();
+    if (!$row || !password_verify($current, $row['password_hash'])) {
+        return [false, 'Current password is incorrect'];
+    }
+    if (strlen($new) < 6) {
+        return [false, 'New password must be at least 6 characters'];
+    }
+    if ($new === $current) {
+        return [false, 'New password must be different from current password'];
+    }
+    $hash = password_hash($new, PASSWORD_BCRYPT);
+    $upd = $pdo->prepare('UPDATE admins SET password_hash = ?, password_changed = 1 WHERE email = ?');
+    $upd->execute([$hash, $email]);
+    return [true, null];
+}
+
+// -------------------- Schema auto-migration (safe, keeps existing data) --------------------
+function column_exists($table, $col) {
+    $pdo = db();
+    $stmt = $pdo->prepare(
+        'SELECT COUNT(*) FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?'
+    );
+    $stmt->execute([$table, $col]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+function migrate_schema() {
+    $pdo = db();
+    try {
+        if (!column_exists('slots', 'held')) {
+            $pdo->exec('ALTER TABLE slots ADD COLUMN held TINYINT(1) NOT NULL DEFAULT 0');
+        }
+        if (!column_exists('slots', 'released')) {
+            $pdo->exec('ALTER TABLE slots ADD COLUMN released TINYINT(1) NOT NULL DEFAULT 0');
+        }
+        if (!column_exists('admins', 'password_changed')) {
+            $pdo->exec('ALTER TABLE admins ADD COLUMN password_changed TINYINT(1) NOT NULL DEFAULT 0');
+        }
+    } catch (Throwable $e) {
+        // Non-fatal: if the DB user lacks ALTER rights the app still runs on existing schema.
+    }
+}
+
+function bootstrap() { migrate_schema(); seed_admin(); }

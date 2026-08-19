@@ -2,6 +2,22 @@
 
 A drop-in PHP/MySQL rebuild of the app. Works on **Hostinger's normal shared hosting** — no VPS needed.
 
+## Upgrading an existing install (keep your data)
+
+Just **re-upload all the files** over your existing ones on Hostinger. You do **NOT** need to
+re-import `db_setup.sql` and **no existing records are deleted**. On the first page load the app
+automatically adds the new columns it needs (`slots.held`, `slots.released`, `admins.password_changed`)
+to your existing tables. Your past boards and super draws stay exactly as they are.
+
+### What's new in the admin panel
+- The number changer now shows **only the single upcoming draw** (e.g. at 3:13 it shows 3:15 only).
+- **Save** sets that slot's numbers.
+- **Hold Result** delays that slot's public reveal for up to **60 seconds**; press **Release** to reveal
+  immediately (otherwise it auto-reveals after 60s).
+- **Change Login Password** lets the admin change their own password (this survives future re-uploads;
+  `config.php`'s `ADMIN_PASSWORD` no longer overrides it once you've changed it in-app).
+
+
 ## What's inside
 
 ```
