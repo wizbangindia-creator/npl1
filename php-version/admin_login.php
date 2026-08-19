@@ -25,7 +25,7 @@ if (is_admin()) { header('Location: admin.php'); exit; }
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NPL1 · Admin Sign In</title>
-  <link rel="stylesheet" href="assets/style.css" />
+  <link rel="stylesheet" href="<?= asset('assets/style.css') ?>" />
 </head>
 <body>
   <div class="ss-page ss-login-page">

@@ -72,6 +72,14 @@ function json_response($data, $status = 200) {
     exit;
 }
 
+// Cache-busting asset URL: appends ?v=<file-modified-time> so browsers always
+// fetch the newest CSS/JS after you re-upload files (fixes stale-cache issues).
+function asset($rel) {
+    $full = __DIR__ . '/' . ltrim($rel, '/');
+    $v = @filemtime($full);
+    return $rel . ($v ? ('?v=' . $v) : '');
+}
+
 // -------------------- Board persistence --------------------
 function ensure_board($date) {
     $pdo = db();
@@ -194,21 +202,18 @@ function require_admin_or_redirect($url = 'admin_login.php') {
     if (!is_admin()) { header('Location: ' . $url); exit; }
 }
 
-// Seed admin row on first use (uses password_hash bcrypt)
+// Seed admin row on first use (uses password_hash bcrypt).
+// IMPORTANT: never overwrites an existing admin's password. Once the row exists,
+// the in-app "Change Password" is the source of truth; config.php ADMIN_PASSWORD is
+// only used to create the very first admin row.
 function seed_admin() {
     $pdo = db();
-    $stmt = $pdo->prepare('SELECT password_hash, password_changed FROM admins WHERE email = ?');
+    $stmt = $pdo->prepare('SELECT id FROM admins WHERE email = ?');
     $stmt->execute([ADMIN_EMAIL]);
-    $row = $stmt->fetch();
-    if (!$row) {
+    if (!$stmt->fetch()) {
         $hash = password_hash(ADMIN_PASSWORD, PASSWORD_BCRYPT);
         $ins = $pdo->prepare('INSERT INTO admins (email, password_hash) VALUES (?, ?)');
         $ins->execute([ADMIN_EMAIL, $hash]);
-    } elseif (empty($row['password_changed']) && !password_verify(ADMIN_PASSWORD, $row['password_hash'])) {
-        // Sync DB password with config.php ONLY while the admin has never changed it in-app.
-        $hash = password_hash(ADMIN_PASSWORD, PASSWORD_BCRYPT);
-        $upd = $pdo->prepare('UPDATE admins SET password_hash = ? WHERE email = ?');
-        $upd->execute([$hash, ADMIN_EMAIL]);
     }
 }
 
@@ -228,7 +233,7 @@ function change_admin_password($email, $current, $new) {
         return [false, 'New password must be different from current password'];
     }
     $hash = password_hash($new, PASSWORD_BCRYPT);
-    $upd = $pdo->prepare('UPDATE admins SET password_hash = ?, password_changed = 1 WHERE email = ?');
+    $upd = $pdo->prepare('UPDATE admins SET password_hash = ? WHERE email = ?');
     $upd->execute([$hash, $email]);
     return [true, null];
 }

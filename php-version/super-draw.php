@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NPL1 · Super Draw</title>
-  <link rel="stylesheet" href="assets/style.css" />
+  <link rel="stylesheet" href="<?= asset('assets/style.css') ?>" />
 </head>
 <body>
   <div class="ss-page">
@@ -41,7 +41,7 @@
     </div>
   </div>
 
-  <script src="assets/app.js"></script>
+  <script src="<?= asset('assets/app.js') ?>"></script>
   <script>NPL1.initSuperDraw();</script>
 </body>
 </html>
